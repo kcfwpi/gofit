@@ -3,7 +3,6 @@ package gofit
 import (
 	"encoding/binary"
 	"io"
-	"os"
 )
 
 type DataMessage struct {
@@ -13,7 +12,7 @@ type DataMessage struct {
 }
 
 type FIT struct {
-	file        string
+	input       io.Reader
 	MessageChan chan DataMessage
 }
 
@@ -29,14 +28,14 @@ type FieldDefinition struct {
 	Endian bool
 }
 
-func NewFIT(file string) *FIT {
-	fit := FIT{file: file}
+func NewFIT(input io.Reader) *FIT {
+	fit := FIT{input: input}
 	fit.MessageChan = make(chan DataMessage)
 
 	return &fit
 }
 
-func parseFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) {
+func (f *FIT) parseFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) {
 	defMesg.Fields = make([]FieldDefinition, 0)
 
 	for i := 0; i < len(fieldDefs); i++ {
@@ -55,14 +54,14 @@ func parseFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) {
 	}
 }
 
-func parseDataMessage(defMesg *DefinitionMesg, data io.Reader) (DataMessage, error) {
+func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 	dataMsg := DataMessage{}
 	dataMsg.Type = defMesg.MesgNum
 	dataMsg.Fields = make(map[byte][]byte)
 
 	for _, field := range defMesg.Fields {
 		dataMsg.Fields[field.Number] = make([]byte, field.Size)
-		_, derr := data.Read(dataMsg.Fields[field.Number])
+		_, derr := f.input.Read(dataMsg.Fields[field.Number])
 		if derr != nil {
 			return dataMsg, derr
 		}
@@ -76,26 +75,18 @@ func (f *FIT) Parse() {
 }
 
 func (f *FIT) parse() {
-	file, ferr := os.Open(f.file)
-	if ferr != nil {
-		f.MessageChan <- DataMessage{Error: ferr}
-		close(f.MessageChan)
-		return
-	}
-	defer file.Close()
-
 	// Parse the header
 	headerLen := make([]byte, 1)
-	_, re := file.Read(headerLen)
+	_, re := f.input.Read(headerLen)
 	if re != nil {
 		f.MessageChan <- DataMessage{Error: re}
 		close(f.MessageChan)
 		return
 	}
-	headerLenInt, _ := binary.Uvarint(headerLen)
 
 	// Seek ahead past the header now that we know its length
-	_, re = file.Seek(int64(headerLenInt), 0)
+	header := make([]byte, headerLen[0]-1)
+	_, re = f.input.Read(header)
 	if re != nil {
 		f.MessageChan <- DataMessage{Error: re}
 		close(f.MessageChan)
@@ -104,6 +95,7 @@ func (f *FIT) parse() {
 
 	// Declare what you can up front to avoid unnecessary gc
 	recordHeader := make([]byte, 1)
+	reserved := make([]byte, 1)
 	arch := make([]byte, 1)
 	globalMsgNum := make([]byte, 2)
 	numFields := make([]byte, 1)
@@ -112,7 +104,7 @@ func (f *FIT) parse() {
 
 	for true {
 		// Read the record header
-		_, re = file.Read(recordHeader)
+		_, re = f.input.Read(recordHeader)
 		if re != nil {
 			f.MessageChan <- DataMessage{Error: re}
 			close(f.MessageChan)
@@ -126,8 +118,8 @@ func (f *FIT) parse() {
 			localMessageType := recordHeader[0] & 15
 
 			// Read the reserved
-			file.Seek(1, 1)
-			_, re = file.Read(arch)
+			f.input.Read(reserved)
+			_, re = f.input.Read(arch)
 			if re != nil {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
@@ -135,7 +127,7 @@ func (f *FIT) parse() {
 			}
 
 			// Read the global message number
-			_, re = file.Read(globalMsgNum)
+			_, re = f.input.Read(globalMsgNum)
 			if re != nil {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
@@ -150,7 +142,7 @@ func (f *FIT) parse() {
 			}
 
 			// Read the number of fields
-			_, re = file.Read(numFields)
+			_, re = f.input.Read(numFields)
 			if re != nil {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
@@ -159,13 +151,13 @@ func (f *FIT) parse() {
 
 			// Read the full block of field definitions and then parse them
 			fieldDefinitions := make([]byte, 3*numFields[0])
-			_, re := file.Read(fieldDefinitions)
+			_, re := f.input.Read(fieldDefinitions)
 			if re != nil {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
 				return
 			}
-			parseFieldDefinitions(&currentDefinition, fieldDefinitions)
+			f.parseFieldDefinitions(&currentDefinition, fieldDefinitions)
 
 			// Add this local message type to map
 			localMessageTypes[localMessageType] = currentDefinition
@@ -175,7 +167,7 @@ func (f *FIT) parse() {
 			currentDefinition := localMessageTypes[localMessageType]
 
 			// Now parse the data msg
-			dataMsg, dataErr := parseDataMessage(&currentDefinition, file)
+			dataMsg, dataErr := f.parseDataMessage(&currentDefinition)
 			if dataErr != nil {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
