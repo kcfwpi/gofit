@@ -31,10 +31,6 @@ func TestNewFIT(t *testing.T) {
 	}
 }
 
-func getEpoch() time.Time {
-	return time.Date(1989, time.December, 31, 0, 0, 0, 0, time.UTC)
-}
-
 func TestPower(t *testing.T) {
 	f, ferr := os.Open("testfiles/test2.fit")
 	if ferr != nil {

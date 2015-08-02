@@ -3,6 +3,7 @@ package gofit
 import (
 	"encoding/binary"
 	"io"
+	"time"
 )
 
 type DataMessage struct {
@@ -26,6 +27,10 @@ type FieldDefinition struct {
 	Size   byte
 	Type   byte
 	Endian bool
+}
+
+func GetEpoch() time.Time {
+	return time.Date(1989, time.December, 31, 0, 0, 0, 0, time.UTC)
 }
 
 func NewFIT(input io.Reader) *FIT {
