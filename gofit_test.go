@@ -51,7 +51,7 @@ func TestPower(t *testing.T) {
 			if m.Type == 20 {
 				power := int(binary.LittleEndian.Uint16(m.Fields[7]))
 				ts := int(binary.LittleEndian.Uint32(m.Fields[253]))
-				adjustedTs := getEpoch().Add(time.Duration(ts) * time.Second)
+				adjustedTs := GetEpoch().Add(time.Duration(ts) * time.Second)
 
 				if (powers[idx] != power) || (times[idx] != adjustedTs.Unix()) {
 					t.Logf("index: %d, powers: %d, ts: %d, message: %d\n", idx, powers[idx], power)
@@ -61,4 +61,28 @@ func TestPower(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBadfile(t *testing.T) {
+	f, ferr := os.Open("testfiles/bad.fit")
+	if ferr != nil {
+		t.Logf("%s\n", ferr)
+		t.Fail()
+		return
+	}
+
+	fit := NewFIT(f)
+	fit.Parse()
+
+	gotError := false
+	for msg := range fit.MessageChan {
+		if msg.Error != nil {
+			gotError = true
+		}
+	}
+
+	if !gotError {
+		t.Fail()
+	}
+
 }

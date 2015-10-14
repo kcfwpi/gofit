@@ -2,6 +2,7 @@ package gofit
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"time"
 )
@@ -40,15 +41,24 @@ func NewFIT(input io.Reader) *FIT {
 	return &fit
 }
 
-func (f *FIT) parseFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) {
+func (f *FIT) parseFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) error {
 	defMesg.Fields = make([]FieldDefinition, 0)
 
 	for i := 0; i < len(fieldDefs); i++ {
 		fd := FieldDefinition{}
 		fd.Number = fieldDefs[i]
 		i++
+
+		if i >= len(fieldDefs) {
+			return errors.New("invalid fit file: field definition format incorrect")
+		}
+
 		fd.Size = fieldDefs[i]
 		i++
+
+		if i >= len(fieldDefs) {
+			return errors.New("invalid fit file: field definition format incorrect")
+		}
 
 		if (fieldDefs[i] & 64) == 64 {
 			fd.Endian = true
@@ -57,6 +67,8 @@ func (f *FIT) parseFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) {
 
 		defMesg.Fields = append(defMesg.Fields, fd)
 	}
+
+	return nil
 }
 
 func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
@@ -162,7 +174,12 @@ func (f *FIT) parse() {
 				close(f.MessageChan)
 				return
 			}
-			f.parseFieldDefinitions(&currentDefinition, fieldDefinitions)
+			pfd := f.parseFieldDefinitions(&currentDefinition, fieldDefinitions)
+			if pfd != nil {
+				f.MessageChan <- DataMessage{Error: pfd}
+				close(f.MessageChan)
+				return
+			}
 
 			// Add this local message type to map
 			localMessageTypes[localMessageType] = currentDefinition
