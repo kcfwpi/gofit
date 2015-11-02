@@ -84,5 +84,40 @@ func TestBadfile(t *testing.T) {
 	if !gotError {
 		t.Fail()
 	}
+}
 
+func TestSensors(t *testing.T) {
+	f, ferr := os.Open("testfiles/21497.fit")
+	if ferr != nil {
+		t.Logf("%s\n", ferr)
+		t.Fail()
+		return
+	}
+
+	fit := NewFIT(f)
+	fit.Parse()
+
+	sensors := make(map[uint16]bool)
+
+	for msg := range fit.MessageChan {
+		if msg.Type == 23 {
+			if len(msg.Fields[3]) == 4 {
+				id := binary.LittleEndian.Uint16(msg.Fields[3])
+				sensors[id] = true
+			}
+		}
+	}
+
+	if (sensors[0] != true) || (sensors[7212] != true) || (sensors[21497] != true) || (sensors[53464] != true) {
+		t.Fail()
+	}
+
+	count := 0
+	for range sensors {
+		count++
+	}
+
+	if count != 4 {
+		t.Fail()
+	}
 }
