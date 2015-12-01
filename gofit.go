@@ -11,6 +11,7 @@ type DataMessage struct {
 	Type   uint16
 	Fields map[byte][]byte
 	Error  error
+	Arch   byte
 }
 
 type FIT struct {
@@ -20,6 +21,7 @@ type FIT struct {
 
 type DefinitionMesg struct {
 	MesgNum uint16
+	Arch    byte
 	Fields  []FieldDefinition
 }
 
@@ -75,6 +77,7 @@ func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 	dataMsg := DataMessage{}
 	dataMsg.Type = defMesg.MesgNum
 	dataMsg.Fields = make(map[byte][]byte)
+	dataMsg.Arch = defMesg.Arch
 
 	for _, field := range defMesg.Fields {
 		dataMsg.Fields[field.Number] = make([]byte, field.Size)
@@ -142,6 +145,7 @@ func (f *FIT) parse() {
 				close(f.MessageChan)
 				return
 			}
+			currentDefinition.Arch = arch[0]
 
 			// Read the global message number
 			_, re = f.input.Read(globalMsgNum)
