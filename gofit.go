@@ -8,10 +8,11 @@ import (
 )
 
 type DataMessage struct {
-	Type   uint16
-	Fields map[byte][]byte
-	Error  error
-	Arch   byte
+	Type      uint16
+	Fields    map[byte][]byte
+	DevFields map[byte][]byte
+	Error     error
+	Arch      byte
 }
 
 type FIT struct {
@@ -20,16 +21,19 @@ type FIT struct {
 }
 
 type DefinitionMesg struct {
-	MesgNum uint16
-	Arch    byte
-	Fields  []FieldDefinition
+	MesgNum     uint16
+	Arch        byte
+	DevDataFlag byte
+	Fields      []FieldDefinition
+	DevFields   []FieldDefinition
 }
 
 type FieldDefinition struct {
-	Number byte
-	Size   byte
-	Type   byte
-	Endian bool
+	Number     byte
+	Size       byte
+	Type       byte
+	Endian     bool
+	DevDataIdx byte
 }
 
 func GetEpoch() time.Time {
@@ -73,15 +77,51 @@ func (f *FIT) parseFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) e
 	return nil
 }
 
+func (f *FIT) parseDevFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte) error {
+	defMesg.DevFields = make([]FieldDefinition, 0)
+
+	for i := 0; i < len(fieldDefs); i++ {
+		fd := FieldDefinition{}
+		fd.Number = fieldDefs[i]
+		i++
+
+		if i >= len(fieldDefs) {
+			return errors.New("invalid fit file: dev field definition format incorrect")
+		}
+
+		fd.Size = fieldDefs[i]
+		i++
+
+		if i >= len(fieldDefs) {
+			return errors.New("invalid fit file: dev field definition format incorrect")
+		}
+
+		fd.DevDataIdx = fieldDefs[i]
+
+		defMesg.DevFields = append(defMesg.DevFields, fd)
+	}
+
+	return nil
+}
+
 func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 	dataMsg := DataMessage{}
 	dataMsg.Type = defMesg.MesgNum
 	dataMsg.Fields = make(map[byte][]byte)
+	dataMsg.DevFields = make(map[byte][]byte)
 	dataMsg.Arch = defMesg.Arch
 
 	for _, field := range defMesg.Fields {
 		dataMsg.Fields[field.Number] = make([]byte, field.Size)
 		_, derr := f.input.Read(dataMsg.Fields[field.Number])
+		if derr != nil {
+			return dataMsg, derr
+		}
+	}
+
+	for _, field := range defMesg.DevFields {
+		dataMsg.DevFields[field.Number] = make([]byte, field.Size)
+		_, derr := f.input.Read(dataMsg.DevFields[field.Number])
 		if derr != nil {
 			return dataMsg, derr
 		}
@@ -119,6 +159,7 @@ func (f *FIT) parse() {
 	arch := make([]byte, 1)
 	globalMsgNum := make([]byte, 2)
 	numFields := make([]byte, 1)
+	numDevFields := make([]byte, 1)
 
 	localMessageTypes := make(map[byte]DefinitionMesg)
 
@@ -134,6 +175,7 @@ func (f *FIT) parse() {
 		// If this is a definition message
 		if (recordHeader[0] & 64) == 64 {
 			currentDefinition := DefinitionMesg{}
+			currentDefinition.DevDataFlag = recordHeader[0] & 32
 
 			localMessageType := recordHeader[0] & 15
 
@@ -183,6 +225,31 @@ func (f *FIT) parse() {
 				f.MessageChan <- DataMessage{Error: pfd}
 				close(f.MessageChan)
 				return
+			}
+
+			// If the developer data flag is set, read the dev data fields
+			if currentDefinition.DevDataFlag > 0 {
+				// Read the number of fields
+				_, re = f.input.Read(numDevFields)
+				if re != nil {
+					f.MessageChan <- DataMessage{Error: re}
+					close(f.MessageChan)
+					return
+				}
+
+				devFieldDefinitions := make([]byte, 3*numDevFields[0])
+				_, re := f.input.Read(devFieldDefinitions)
+				if re != nil {
+					f.MessageChan <- DataMessage{Error: re}
+					close(f.MessageChan)
+					return
+				}
+				pfd := f.parseDevFieldDefinitions(&currentDefinition, devFieldDefinitions)
+				if pfd != nil {
+					f.MessageChan <- DataMessage{Error: pfd}
+					close(f.MessageChan)
+					return
+				}
 			}
 
 			// Add this local message type to map

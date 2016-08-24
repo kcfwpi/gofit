@@ -121,3 +121,24 @@ func TestSensors(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func TestFit2(t *testing.T) {
+	f, ferr := os.Open("testfiles/fit2-2.fit")
+	if ferr != nil {
+		t.Logf("%s\n", ferr)
+		t.Fail()
+		return
+	}
+
+	fit := NewFIT(f)
+	fit.Parse()
+
+	n := 0
+	for m := range fit.MessageChan {
+		if m.Error != nil {
+			t.Logf("error parsing fit file: %s\n", m.Error)
+			break
+		}
+		n++
+	}
+}
