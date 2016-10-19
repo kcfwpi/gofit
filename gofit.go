@@ -213,7 +213,7 @@ func (f *FIT) parse() {
 			}
 
 			// Read the full block of field definitions and then parse them
-			fieldDefinitions := make([]byte, 3*numFields[0])
+			fieldDefinitions := make([]byte, 3*int(numFields[0]))
 			_, re := f.input.Read(fieldDefinitions)
 			if re != nil {
 				f.MessageChan <- DataMessage{Error: re}

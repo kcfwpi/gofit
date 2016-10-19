@@ -142,3 +142,24 @@ func TestFit2(t *testing.T) {
 		n++
 	}
 }
+
+func TestQollector(t *testing.T) {
+	f, ferr := os.Open("testfiles/qollector.fit")
+	if ferr != nil {
+		t.Logf("%s\n", ferr)
+		t.Fail()
+		return
+	}
+
+	fit := NewFIT(f)
+	fit.Parse()
+
+	n := 0
+	for m := range fit.MessageChan {
+		if m.Error != nil {
+			t.Logf("error parsing fit file: %s\n", m.Error)
+			break
+		}
+		n++
+	}
+}
