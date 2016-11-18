@@ -113,16 +113,16 @@ func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 
 	for _, field := range defMesg.Fields {
 		dataMsg.Fields[field.Number] = make([]byte, field.Size)
-		_, derr := f.input.Read(dataMsg.Fields[field.Number])
-		if derr != nil {
+		br, derr := f.input.Read(dataMsg.Fields[field.Number])
+		if derr != nil || br <= 0 {
 			return dataMsg, derr
 		}
 	}
 
 	for _, field := range defMesg.DevFields {
 		dataMsg.DevFields[field.Number] = make([]byte, field.Size)
-		_, derr := f.input.Read(dataMsg.DevFields[field.Number])
-		if derr != nil {
+		br, derr := f.input.Read(dataMsg.DevFields[field.Number])
+		if derr != nil || br <= 0 {
 			return dataMsg, derr
 		}
 	}
@@ -137,8 +137,8 @@ func (f *FIT) Parse() {
 func (f *FIT) parse() {
 	// Parse the header
 	headerLen := make([]byte, 1)
-	_, re := f.input.Read(headerLen)
-	if re != nil {
+	br, re := f.input.Read(headerLen)
+	if re != nil || br <= 0 {
 		f.MessageChan <- DataMessage{Error: re}
 		close(f.MessageChan)
 		return
@@ -146,8 +146,8 @@ func (f *FIT) parse() {
 
 	// Seek ahead past the header now that we know its length
 	header := make([]byte, headerLen[0]-1)
-	_, re = f.input.Read(header)
-	if re != nil {
+	br, re = f.input.Read(header)
+	if re != nil || br <= 0 {
 		f.MessageChan <- DataMessage{Error: re}
 		close(f.MessageChan)
 		return
@@ -165,8 +165,8 @@ func (f *FIT) parse() {
 
 	for true {
 		// Read the record header
-		_, re = f.input.Read(recordHeader)
-		if re != nil {
+		br, re = f.input.Read(recordHeader)
+		if re != nil || br <= 0 {
 			f.MessageChan <- DataMessage{Error: re}
 			close(f.MessageChan)
 			return
@@ -180,9 +180,15 @@ func (f *FIT) parse() {
 			localMessageType := recordHeader[0] & 15
 
 			// Read the reserved
-			f.input.Read(reserved)
-			_, re = f.input.Read(arch)
-			if re != nil {
+			br, re = f.input.Read(reserved)
+			if re != nil || br <= 0 {
+				f.MessageChan <- DataMessage{Error: re}
+				close(f.MessageChan)
+				return
+			}
+
+			br, re = f.input.Read(arch)
+			if re != nil || br <= 0 {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
 				return
@@ -190,8 +196,8 @@ func (f *FIT) parse() {
 			currentDefinition.Arch = arch[0]
 
 			// Read the global message number
-			_, re = f.input.Read(globalMsgNum)
-			if re != nil {
+			br, re = f.input.Read(globalMsgNum)
+			if re != nil || br <= 0 {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
 				return
@@ -205,8 +211,8 @@ func (f *FIT) parse() {
 			}
 
 			// Read the number of fields
-			_, re = f.input.Read(numFields)
-			if re != nil {
+			br, re = f.input.Read(numFields)
+			if re != nil || br <= 0 {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
 				return
@@ -214,8 +220,8 @@ func (f *FIT) parse() {
 
 			// Read the full block of field definitions and then parse them
 			fieldDefinitions := make([]byte, 3*int(numFields[0]))
-			_, re := f.input.Read(fieldDefinitions)
-			if re != nil {
+			br, re := f.input.Read(fieldDefinitions)
+			if re != nil || br <= 0 {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
 				return
@@ -230,20 +236,21 @@ func (f *FIT) parse() {
 			// If the developer data flag is set, read the dev data fields
 			if currentDefinition.DevDataFlag > 0 {
 				// Read the number of fields
-				_, re = f.input.Read(numDevFields)
-				if re != nil {
+				br, re = f.input.Read(numDevFields)
+				if re != nil || br <= 0 {
 					f.MessageChan <- DataMessage{Error: re}
 					close(f.MessageChan)
 					return
 				}
 
 				devFieldDefinitions := make([]byte, 3*numDevFields[0])
-				_, re := f.input.Read(devFieldDefinitions)
-				if re != nil {
+				br, re := f.input.Read(devFieldDefinitions)
+				if re != nil || br <= 0 {
 					f.MessageChan <- DataMessage{Error: re}
 					close(f.MessageChan)
 					return
 				}
+
 				pfd := f.parseDevFieldDefinitions(&currentDefinition, devFieldDefinitions)
 				if pfd != nil {
 					f.MessageChan <- DataMessage{Error: pfd}
