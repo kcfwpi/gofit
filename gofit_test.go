@@ -1,7 +1,9 @@
 package gofit
 
 import (
+	"bytes"
 	"encoding/binary"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -161,5 +163,49 @@ func TestQollector(t *testing.T) {
 			break
 		}
 		n++
+	}
+}
+
+func TestDevData(t *testing.T) {
+	f, ferr := os.Open("testfiles/devdata.fit")
+	if ferr != nil {
+		t.Logf("%s\n", ferr)
+		t.Fail()
+		return
+	}
+
+	fit := NewFIT(f)
+	fit.Parse()
+
+	devFieldMap := make(map[byte]string)
+
+	n := 0
+	for m := range fit.MessageChan {
+		if m.Error != nil {
+			t.Logf("error parsing fit file: %s\n", m.Error)
+			break
+		}
+		n++
+
+		if m.Type == 206 {
+			t.Logf("data idx: %d\n", m.Fields[0])
+			t.Logf("def num: %d\n", m.Fields[1][0])
+			t.Logf("type: %d\n", m.Fields[2])
+			t.Logf("name: %s\n", m.Fields[3])
+			t.Logf("scale: %d\n", m.Fields[6])
+			t.Logf("offset: 	%d\n", m.Fields[7])
+			t.Logf("-----\n")
+
+			devFieldMap[m.Fields[1][0]] = string(bytes.Trim(m.Fields[3], "\x00"))
+		}
+
+		if m.Type == 20 {
+			for i, j := range m.DevFields {
+				if devFieldMap[i] == "Vertical Oscillation" {
+					t.Logf("!! %s - %f !!\n", devFieldMap[i], math.Float32frombits(binary.LittleEndian.Uint32(j)))
+				}
+			}
+			t.Logf("-----\n")
+		}
 	}
 }

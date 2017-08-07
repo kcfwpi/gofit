@@ -269,7 +269,7 @@ func (f *FIT) parse() {
 			// Now parse the data msg
 			dataMsg, dataErr := f.parseDataMessage(&currentDefinition)
 			if dataErr != nil {
-				f.MessageChan <- DataMessage{Error: re}
+				f.MessageChan <- DataMessage{Error: dataErr}
 				close(f.MessageChan)
 				return
 			}
