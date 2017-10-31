@@ -10,7 +10,7 @@ import (
 type DataMessage struct {
 	Type      uint16
 	Fields    map[byte][]byte
-	DevFields map[byte][]byte
+	DevFields map[byte]map[byte][]byte
 	Error     error
 	Arch      byte
 }
@@ -108,7 +108,7 @@ func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 	dataMsg := DataMessage{}
 	dataMsg.Type = defMesg.MesgNum
 	dataMsg.Fields = make(map[byte][]byte)
-	dataMsg.DevFields = make(map[byte][]byte)
+	dataMsg.DevFields = make(map[byte]map[byte][]byte)
 	dataMsg.Arch = defMesg.Arch
 
 	for _, field := range defMesg.Fields {
@@ -120,8 +120,12 @@ func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 	}
 
 	for _, field := range defMesg.DevFields {
-		dataMsg.DevFields[field.Number] = make([]byte, field.Size)
-		br, derr := f.input.Read(dataMsg.DevFields[field.Number])
+		if dataMsg.DevFields[field.DevDataIdx] == nil {
+			dataMsg.DevFields[field.DevDataIdx] = make(map[byte][]byte)
+		}
+
+		dataMsg.DevFields[field.DevDataIdx][field.Number] = make([]byte, field.Size)
+		br, derr := f.input.Read(dataMsg.DevFields[field.DevDataIdx][field.Number])
 		if derr != nil || br <= 0 {
 			return dataMsg, derr
 		}
