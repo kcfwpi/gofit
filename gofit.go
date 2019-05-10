@@ -93,7 +93,7 @@ func (f *FIT) parseDevFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte
 		i++
 
 		if i >= len(fieldDefs) {
-			return errors.New("invalid fit file: dev field definition format incorrect")
+			return errors.New("invalid fit file 2: dev field definition format incorrect")
 		}
 
 		fd.DevDataIdx = fieldDefs[i]
