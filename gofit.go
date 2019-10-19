@@ -104,9 +104,14 @@ func (f *FIT) parseDevFieldDefinitions(defMesg *DefinitionMesg, fieldDefs []byte
 	return nil
 }
 
-func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
+func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, int, error) {
 	dataMsg := DataMessage{}
 	dataMsg.Type = defMesg.MesgNum
+
+	totalRead := 0
+
+	//fmt.Printf("%d\n", defMesg.MesgNum)
+
 	dataMsg.Fields = make(map[byte][]byte)
 	dataMsg.DevFields = make(map[byte]map[byte][]byte)
 	dataMsg.Arch = defMesg.Arch
@@ -115,8 +120,9 @@ func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 		dataMsg.Fields[field.Number] = make([]byte, field.Size)
 		br, derr := f.input.Read(dataMsg.Fields[field.Number])
 		if derr != nil || br <= 0 {
-			return dataMsg, derr
+			return dataMsg, totalRead, derr
 		}
+		totalRead += br
 	}
 
 	for _, field := range defMesg.DevFields {
@@ -127,11 +133,13 @@ func (f *FIT) parseDataMessage(defMesg *DefinitionMesg) (DataMessage, error) {
 		dataMsg.DevFields[field.DevDataIdx][field.Number] = make([]byte, field.Size)
 		br, derr := f.input.Read(dataMsg.DevFields[field.DevDataIdx][field.Number])
 		if derr != nil || br <= 0 {
-			return dataMsg, derr
+			return dataMsg, totalRead, derr
 		}
+		totalRead += br
+
 	}
 
-	return dataMsg, nil
+	return dataMsg, totalRead, nil
 }
 
 func (f *FIT) Parse() {
@@ -139,149 +147,196 @@ func (f *FIT) Parse() {
 }
 
 func (f *FIT) parse() {
-	// Parse the header
-	headerLen := make([]byte, 1)
-	br, re := f.input.Read(headerLen)
-	if re != nil || br <= 0 {
-		f.MessageChan <- DataMessage{Error: re}
-		close(f.MessageChan)
-		return
-	}
-
-	// Seek ahead past the header now that we know its length
-	header := make([]byte, headerLen[0]-1)
-	br, re = f.input.Read(header)
-	if re != nil || br <= 0 {
-		f.MessageChan <- DataMessage{Error: re}
-		close(f.MessageChan)
-		return
-	}
-
-	// Declare what you can up front to avoid unnecessary gc
-	recordHeader := make([]byte, 1)
-	reserved := make([]byte, 1)
-	arch := make([]byte, 1)
-	globalMsgNum := make([]byte, 2)
-	numFields := make([]byte, 1)
-	numDevFields := make([]byte, 1)
-
-	localMessageTypes := make(map[byte]DefinitionMesg)
-
 	for true {
-		// Read the record header
-		br, re = f.input.Read(recordHeader)
+		totalDataRead := 0
+
+		// Parse the header
+		headerLen := make([]byte, 1)
+		br, re := f.input.Read(headerLen)
 		if re != nil || br <= 0 {
 			f.MessageChan <- DataMessage{Error: re}
 			close(f.MessageChan)
 			return
 		}
 
-		// If this is a definition message
-		if (recordHeader[0] & 64) == 64 {
-			currentDefinition := DefinitionMesg{}
-			currentDefinition.DevDataFlag = recordHeader[0] & 32
+		protocolVersion := make([]byte, 1)
+		br, re = f.input.Read(protocolVersion)
+		if re != nil || br <= 0 {
+			f.MessageChan <- DataMessage{Error: re}
+			close(f.MessageChan)
+			return
+		}
 
-			localMessageType := recordHeader[0] & 15
+		profileVersion := make([]byte, 2)
+		br, re = f.input.Read(profileVersion)
+		if re != nil || br <= 0 {
+			f.MessageChan <- DataMessage{Error: re}
+			close(f.MessageChan)
+			return
+		}
 
-			// Read the reserved
-			br, re = f.input.Read(reserved)
+		dataSize := make([]byte, 4)
+		br, re = f.input.Read(dataSize)
+		if re != nil || br <= 0 {
+			f.MessageChan <- DataMessage{Error: re}
+			close(f.MessageChan)
+			return
+		}
+		dataSizeInt := binary.LittleEndian.Uint32(dataSize)
+
+		// Seek ahead past the header now that we know its length
+		header := make([]byte, headerLen[0]-8)
+		br, re = f.input.Read(header)
+		if re != nil || br <= 0 {
+			f.MessageChan <- DataMessage{Error: re}
+			close(f.MessageChan)
+			return
+		}
+
+		// Declare what you can up front to avoid unnecessary gc
+		recordHeader := make([]byte, 1)
+		reserved := make([]byte, 1)
+		arch := make([]byte, 1)
+		globalMsgNum := make([]byte, 2)
+		numFields := make([]byte, 1)
+		numDevFields := make([]byte, 1)
+
+		localMessageTypes := make(map[byte]DefinitionMesg)
+
+		for uint32(totalDataRead) < dataSizeInt {
+			// Read the record header
+			br, re = f.input.Read(recordHeader)
 			if re != nil || br <= 0 {
 				f.MessageChan <- DataMessage{Error: re}
 				close(f.MessageChan)
 				return
 			}
+			totalDataRead += br
 
-			br, re = f.input.Read(arch)
-			if re != nil || br <= 0 {
-				f.MessageChan <- DataMessage{Error: re}
-				close(f.MessageChan)
-				return
-			}
-			currentDefinition.Arch = arch[0]
+			// If this is a definition message
+			if (recordHeader[0] & 64) == 64 {
+				currentDefinition := DefinitionMesg{}
+				currentDefinition.DevDataFlag = recordHeader[0] & 32
 
-			// Read the global message number
-			br, re = f.input.Read(globalMsgNum)
-			if re != nil || br <= 0 {
-				f.MessageChan <- DataMessage{Error: re}
-				close(f.MessageChan)
-				return
-			}
+				localMessageType := recordHeader[0] & 15
 
-			// Check the arch field to determine the endianness of the global mesg num
-			if int64(arch[0]) == 0 {
-				currentDefinition.MesgNum = binary.LittleEndian.Uint16(globalMsgNum)
-			} else {
-				currentDefinition.MesgNum = binary.BigEndian.Uint16(globalMsgNum)
-			}
+				// Read the reserved
+				br, re = f.input.Read(reserved)
+				if re != nil || br <= 0 {
+					f.MessageChan <- DataMessage{Error: re}
+					close(f.MessageChan)
+					return
+				}
+				totalDataRead += br
 
-			// Read the number of fields
-			br, re = f.input.Read(numFields)
-			if re != nil || br <= 0 {
-				f.MessageChan <- DataMessage{Error: re}
-				close(f.MessageChan)
-				return
-			}
+				br, re = f.input.Read(arch)
+				if re != nil || br <= 0 {
+					f.MessageChan <- DataMessage{Error: re}
+					close(f.MessageChan)
+					return
+				}
+				totalDataRead += br
+				currentDefinition.Arch = arch[0]
 
-			// Read the full block of field definitions and then parse them
-			fieldDefinitions := make([]byte, 3*int(numFields[0]))
-			br, re := f.input.Read(fieldDefinitions)
-			if re != nil || br <= 0 {
-				f.MessageChan <- DataMessage{Error: re}
-				close(f.MessageChan)
-				return
-			}
-			pfd := f.parseFieldDefinitions(&currentDefinition, fieldDefinitions)
-			if pfd != nil {
-				f.MessageChan <- DataMessage{Error: pfd}
-				close(f.MessageChan)
-				return
-			}
+				// Read the global message number
+				br, re = f.input.Read(globalMsgNum)
+				if re != nil || br <= 0 {
+					f.MessageChan <- DataMessage{Error: re}
+					close(f.MessageChan)
+					return
+				}
+				totalDataRead += br
 
-			// If the developer data flag is set, read the dev data fields
-			if currentDefinition.DevDataFlag > 0 {
+				// Check the arch field to determine the endianness of the global mesg num
+				if int64(arch[0]) == 0 {
+					currentDefinition.MesgNum = binary.LittleEndian.Uint16(globalMsgNum)
+				} else {
+					currentDefinition.MesgNum = binary.BigEndian.Uint16(globalMsgNum)
+				}
+
 				// Read the number of fields
-				br, re = f.input.Read(numDevFields)
+				br, re = f.input.Read(numFields)
 				if re != nil || br <= 0 {
 					f.MessageChan <- DataMessage{Error: re}
 					close(f.MessageChan)
 					return
 				}
+				totalDataRead += br
 
-				devFieldDefinitions := make([]byte, 3*numDevFields[0])
-				br, re := f.input.Read(devFieldDefinitions)
+				// Read the full block of field definitions and then parse them
+				fieldDefinitions := make([]byte, 3*int(numFields[0]))
+				br, re := f.input.Read(fieldDefinitions)
 				if re != nil || br <= 0 {
 					f.MessageChan <- DataMessage{Error: re}
 					close(f.MessageChan)
 					return
 				}
+				totalDataRead += br
 
-				pfd := f.parseDevFieldDefinitions(&currentDefinition, devFieldDefinitions)
+				pfd := f.parseFieldDefinitions(&currentDefinition, fieldDefinitions)
 				if pfd != nil {
 					f.MessageChan <- DataMessage{Error: pfd}
 					close(f.MessageChan)
 					return
 				}
+
+				// If the developer data flag is set, read the dev data fields
+				if currentDefinition.DevDataFlag > 0 {
+					// Read the number of fields
+					br, re = f.input.Read(numDevFields)
+					if re != nil || br <= 0 {
+						f.MessageChan <- DataMessage{Error: re}
+						close(f.MessageChan)
+						return
+					}
+					totalDataRead += br
+
+					devFieldDefinitions := make([]byte, 3*numDevFields[0])
+					br, re := f.input.Read(devFieldDefinitions)
+					if re != nil || br <= 0 {
+						f.MessageChan <- DataMessage{Error: re}
+						close(f.MessageChan)
+						return
+					}
+					totalDataRead += br
+
+					pfd := f.parseDevFieldDefinitions(&currentDefinition, devFieldDefinitions)
+					if pfd != nil {
+						f.MessageChan <- DataMessage{Error: pfd}
+						close(f.MessageChan)
+						return
+					}
+
+				}
+
+				// Add this local message type to map
+				localMessageTypes[localMessageType] = currentDefinition
+			} else {
+				// Parse the local message type of this data message then look for its definition in the map
+				localMessageType := recordHeader[0] & 15
+				currentDefinition := localMessageTypes[localMessageType]
+
+				// Now parse the data msg
+				dataMsg, dataMsgBr, dataErr := f.parseDataMessage(&currentDefinition)
+				if dataErr != nil {
+					f.MessageChan <- DataMessage{Error: dataErr}
+					close(f.MessageChan)
+					return
+				}
+				totalDataRead += dataMsgBr
+
+				// And send the result to the result channel
+				f.MessageChan <- dataMsg
 			}
 
-			// Add this local message type to map
-			localMessageTypes[localMessageType] = currentDefinition
-		} else {
-			// Parse the local message type of this data message then look for its definition in the map
-			localMessageType := recordHeader[0] & 15
-			currentDefinition := localMessageTypes[localMessageType]
-
-			// Now parse the data msg
-			dataMsg, dataErr := f.parseDataMessage(&currentDefinition)
-			if dataErr != nil {
-				f.MessageChan <- DataMessage{Error: dataErr}
-				close(f.MessageChan)
-				return
-			}
-
-			// And send the result to the result channel
-			f.MessageChan <- dataMsg
 		}
 
+		crc := make([]byte, 2)
+		br, re = f.input.Read(crc)
+		if re != nil || br <= 0 {
+			f.MessageChan <- DataMessage{Error: re}
+			close(f.MessageChan)
+			return
+		}
 	}
-
 }
