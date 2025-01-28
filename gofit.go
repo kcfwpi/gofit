@@ -264,20 +264,22 @@ func (f *FIT) parse() {
 				totalDataRead += br
 
 				// Read the full block of field definitions and then parse them
-				fieldDefinitions := make([]byte, 3*int(numFields[0]))
-				br, re := f.input.Read(fieldDefinitions)
-				if re != nil || br <= 0 {
-					f.MessageChan <- DataMessage{Error: re}
-					close(f.MessageChan)
-					return
-				}
-				totalDataRead += br
+				if numFields[0] != 0 {
+					fieldDefinitions := make([]byte, 3*int(numFields[0]))
+					br, re := f.input.Read(fieldDefinitions)
+					if re != nil || br <= 0 {
+						f.MessageChan <- DataMessage{Error: re}
+						close(f.MessageChan)
+						return
+					}
+					totalDataRead += br
 
-				pfd := f.parseFieldDefinitions(&currentDefinition, fieldDefinitions)
-				if pfd != nil {
-					f.MessageChan <- DataMessage{Error: pfd}
-					close(f.MessageChan)
-					return
+					pfd := f.parseFieldDefinitions(&currentDefinition, fieldDefinitions)
+					if pfd != nil {
+						f.MessageChan <- DataMessage{Error: pfd}
+						close(f.MessageChan)
+						return
+					}
 				}
 
 				// If the developer data flag is set, read the dev data fields
@@ -328,7 +330,6 @@ func (f *FIT) parse() {
 				// And send the result to the result channel
 				f.MessageChan <- dataMsg
 			}
-
 		}
 
 		crc := make([]byte, 2)
