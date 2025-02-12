@@ -295,7 +295,8 @@ func (f *FIT) parse() {
 
 					devFieldDefinitions := make([]byte, 3*numDevFields[0])
 					br, re := f.input.Read(devFieldDefinitions)
-					if re != nil || br <= 0 {
+					// if re != nil || br <= 0 {
+					if re != nil {
 						f.MessageChan <- DataMessage{Error: re}
 						close(f.MessageChan)
 						return
