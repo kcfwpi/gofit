@@ -203,6 +203,9 @@ func (f *FIT) parse() {
 
 		localMessageTypes := make(map[byte]DefinitionMesg)
 
+		// The last full timestamp seen, which compressed timestamp headers are relative to
+		var lastTimestamp uint32
+
 		for uint32(totalDataRead) < dataSizeInt {
 			// Read the record header
 			br, re = f.input.Read(recordHeader)
@@ -213,8 +216,45 @@ func (f *FIT) parse() {
 			}
 			totalDataRead += br
 
-			// If this is a definition message
-			if (recordHeader[0] & 64) == 64 {
+			// If this is a compressed timestamp header: bit 7 set, local message type in
+			// bits 5-6 and a 5 bit time offset in bits 0-4. This has to be checked first
+			// since bit 6 here is part of the local message type, not the definition flag.
+			if (recordHeader[0] & 128) == 128 {
+				localMessageType := (recordHeader[0] >> 5) & 3
+				currentDefinition := localMessageTypes[localMessageType]
+
+				// The offset replaces the low 5 bits of the last timestamp, rolling over
+				// when it is smaller than them
+				offset := uint32(recordHeader[0] & 31)
+				timestamp := (lastTimestamp &^ 31) + offset
+				if offset < lastTimestamp&31 {
+					timestamp += 32
+				}
+				lastTimestamp = timestamp
+
+				dataMsg, dataMsgBr, dataErr := f.parseDataMessage(&currentDefinition)
+				if dataErr != nil {
+					f.MessageChan <- DataMessage{Error: dataErr}
+					close(f.MessageChan)
+					return
+				}
+				totalDataRead += dataMsgBr
+
+				// Add the timestamp as a regular field so callers don't need to know the
+				// header was compressed
+				if _, ok := dataMsg.Fields[253]; !ok {
+					ts := make([]byte, 4)
+					if dataMsg.Arch == 0 {
+						binary.LittleEndian.PutUint32(ts, timestamp)
+					} else {
+						binary.BigEndian.PutUint32(ts, timestamp)
+					}
+					dataMsg.Fields[253] = ts
+				}
+
+				f.MessageChan <- dataMsg
+			} else if (recordHeader[0] & 64) == 64 {
+				// If this is a definition message
 				currentDefinition := DefinitionMesg{}
 				currentDefinition.DevDataFlag = recordHeader[0] & 32
 
@@ -293,7 +333,8 @@ func (f *FIT) parse() {
 					}
 					totalDataRead += br
 
-					devFieldDefinitions := make([]byte, 3*numDevFields[0])
+					// Widen before multiplying, a byte overflows past 85 dev fields
+					devFieldDefinitions := make([]byte, 3*int(numDevFields[0]))
 					br, re := f.input.Read(devFieldDefinitions)
 					// if re != nil || br <= 0 {
 					if re != nil {
@@ -327,6 +368,15 @@ func (f *FIT) parse() {
 					return
 				}
 				totalDataRead += dataMsgBr
+
+				// Track the timestamp for any compressed timestamp headers that follow
+				if ts, ok := dataMsg.Fields[253]; ok && len(ts) == 4 {
+					if dataMsg.Arch == 0 {
+						lastTimestamp = binary.LittleEndian.Uint32(ts)
+					} else {
+						lastTimestamp = binary.BigEndian.Uint32(ts)
+					}
+				}
 
 				// And send the result to the result channel
 				f.MessageChan <- dataMsg

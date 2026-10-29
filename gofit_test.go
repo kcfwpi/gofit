@@ -3,6 +3,7 @@ package gofit
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"math"
 	"os"
 	"testing"
@@ -200,12 +201,111 @@ func TestDevData(t *testing.T) {
 		}
 
 		if m.Type == 20 {
-			for i, j := range m.DevFields {
-				if devFieldMap[i] == "Vertical Oscillation" {
-					t.Logf("!! %s - %f !!\n", devFieldMap[i], math.Float32frombits(binary.LittleEndian.Uint32(j)))
+			for _, fields := range m.DevFields {
+				for i, j := range fields {
+					if devFieldMap[i] == "Vertical Oscillation" {
+						t.Logf("!! %s - %f !!\n", devFieldMap[i], math.Float32frombits(binary.LittleEndian.Uint32(j)))
+					}
 				}
 			}
 			t.Logf("-----\n")
 		}
+	}
+}
+
+// buildFIT wraps record bytes in a 14 byte FIT header and a (zero) CRC
+func buildFIT(records []byte) []byte {
+	out := []byte{14, 32, 0, 0, 0, 0, 0, 0, '.', 'F', 'I', 'T', 0, 0}
+	binary.LittleEndian.PutUint32(out[4:8], uint32(len(records)))
+	out = append(out, records...)
+	return append(out, 0, 0)
+}
+
+func TestCompressedTimestamps(t *testing.T) {
+	for _, arch := range []byte{0, 1} {
+		var order binary.ByteOrder = binary.LittleEndian
+		if arch == 1 {
+			order = binary.BigEndian
+		}
+		globalNum := make([]byte, 2)
+		order.PutUint16(globalNum, 20)
+
+		var recs []byte
+		// Local type 0: record with timestamp and heart rate
+		recs = append(recs, 0x40, 0, arch, globalNum[0], globalNum[1], 2, 253, 4, 134, 3, 1, 2)
+		// Local type 3: record with heart rate only. Bit 6 of its compressed headers is
+		// set, which must not be read as a definition.
+		recs = append(recs, 0x43, 0, arch, globalNum[0], globalNum[1], 1, 3, 1, 2)
+
+		ts := make([]byte, 4)
+		order.PutUint32(ts, 1000) // low 5 bits are 8
+		recs = append(recs, 0x00, ts[0], ts[1], ts[2], ts[3], 100)
+		recs = append(recs, 0x80|3<<5|10, 101) // 1002
+		recs = append(recs, 0x80|3<<5|30, 102) // 1022
+		recs = append(recs, 0x80|3<<5|2, 103)  // rolls over to 1026
+
+		fit := NewFIT(bytes.NewReader(buildFIT(recs)))
+		fit.Parse()
+
+		want := []uint32{1000, 1002, 1022, 1026}
+		n := 0
+		for m := range fit.MessageChan {
+			if m.Error != nil {
+				if m.Error != io.EOF {
+					t.Fatalf("arch %d: error parsing fit file: %s", arch, m.Error)
+				}
+				break
+			}
+			if n >= len(want) {
+				t.Fatalf("arch %d: too many messages", arch)
+			}
+			if got := order.Uint32(m.Fields[253]); got != want[n] {
+				t.Errorf("arch %d: message %d timestamp %d, want %d", arch, n, got, want[n])
+			}
+			if got := m.Fields[3][0]; got != byte(100+n) {
+				t.Errorf("arch %d: message %d heart rate %d, want %d", arch, n, got, 100+n)
+			}
+			n++
+		}
+		if n != len(want) {
+			t.Errorf("arch %d: got %d messages, want %d", arch, n, len(want))
+		}
+	}
+}
+
+func TestManyDevFields(t *testing.T) {
+	// 86 dev fields is 258 bytes of definitions, which overflowed a byte to 2
+	const numDev = 86
+
+	recs := []byte{0x60, 0, 0, 20, 0, 1, 3, 1, 2, numDev}
+	for i := 0; i < numDev; i++ {
+		recs = append(recs, byte(i), 1, 0)
+	}
+	recs = append(recs, 0x00, 150)
+	for i := 0; i < numDev; i++ {
+		recs = append(recs, byte(i))
+	}
+
+	fit := NewFIT(bytes.NewReader(buildFIT(recs)))
+	fit.Parse()
+
+	n := 0
+	for m := range fit.MessageChan {
+		if m.Error != nil {
+			if m.Error != io.EOF {
+				t.Fatalf("error parsing fit file: %s", m.Error)
+			}
+			break
+		}
+		if len(m.DevFields[0]) != numDev {
+			t.Errorf("got %d dev fields, want %d", len(m.DevFields[0]), numDev)
+		}
+		if m.DevFields[0][85][0] != 85 {
+			t.Errorf("dev field 85 = %d, want 85", m.DevFields[0][85][0])
+		}
+		n++
+	}
+	if n != 1 {
+		t.Errorf("got %d messages, want 1", n)
 	}
 }
